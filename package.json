@@ -1,0 +1,33 @@
+{
+  "name": "listenerbackend",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node ./bin/www"
+  },
+  "engines": {
+    "node": "16.14.0",
+    "npm": "8.10.0"
+  },
+  "dependencies": {
+    "bcrypt": "^5.0.1",
+    "casper-js-sdk": "^2.9.1",
+    "cookie-parser": "~1.4.6",
+    "debug": "~4.3.4",
+    "dotenv": "^16.0.1",
+    "express": "~4.18.1",
+    "generic-pool": "^3.8.2",
+    "http-errors": "~2.0.0",
+    "jsonwebtoken": "^8.5.1",
+    "kafkajs": "^2.0.2",
+    "mongoose": "^6.3.8",
+    "morgan": "~1.10.0",
+    "passport": "^0.6.0",
+    "passport-jwt": "^4.0.0",
+    "pug": "~3.0.2",
+    "redis": "^4.1.0",
+    "serialize-javascript": "^6.0.0",
+    "swagger-jsdoc": "^6.0.1",
+    "swagger-ui-express": "^4.1.6"
+  }
+}
