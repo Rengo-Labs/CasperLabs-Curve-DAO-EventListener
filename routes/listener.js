@@ -7,8 +7,9 @@ const {
   CLValueBuilder,
   CLValueParsers,
   CLMap,
-  CasperServiceByJsonRPC,
 } = CasperSDK;
+const fs = require('fs');
+const sgMail = require("../config/sgMail");
 
 //for all env variables imports
 require("dotenv").config();
@@ -22,6 +23,7 @@ var eventsDataModel = require("../models/eventsData");
 var eventsReplayDataModel = require("../models/eventsReplayData");
 var eventReplayStatusModel = require("../models/eventReplayStatus");
 var eventsReplayStatusesModel = require("../models/eventsReplayStatuses");
+var manualEventReplayStatuses = require("../models/manualEventReplayStatuses");
 
 //seting up kafka
 //setting up a producer
@@ -42,6 +44,7 @@ var serialize = require("serialize-javascript");
 
 //import library to create pool to limit no of connections to RPC
 const genericPool = require("generic-pool");
+const { ExtendedCasperService } = require("../utils/extendedCasperService");
 
 //for global use
 var contractsPackageHashes = [];
@@ -49,9 +52,7 @@ var PackageHashes = [];
 var queuePopFlag = 0;
 
 // // creating a connection to a node for RPC API endpoints
-const casperService = new CasperServiceByJsonRPC(
-  process.env.JSON_RPC_API_NODE_URL
-);
+const casperService = new ExtendedCasperService(process.env.JSON_RPC_API_NODE_URL);
 
 //function to deserialize Event Data
 function deserialize(serializedJavascript) {
@@ -290,7 +291,7 @@ async function popAndProcessEventsFromRedisQueue(queue) {
                 "Event is in pending status in database, produce in kafka..."
               );
               //produce read Event to kafka
-              await produceInKafka(deserializedHeadValue);
+              await produceInKafka(deserializedHeadValue,eventResult);
             }
           }
         }
@@ -313,17 +314,12 @@ async function popAndProcessEventsFromRedisQueue(queue) {
 
 //this code is for replay Events if server goes down, (under testing)
 // to get the latest block height of a node
-async function getLatestBlockHeight(retry) {
+async function getLatestBlockHeight(retry, rpcTimeout) {
   try {
-    const interval = setTimeout(function () {
-      retry.rpcNotResponded = true;
-      console.log("RPC not responded for block: ", height);
-    }, 30000);
-
     let flag = 0;
     let latestBlockInfoResult = null;
     casperService
-      .getLatestBlockInfo()
+      .getLatestBlockInfo(rpcTimeout)
       .then(function (blockData) {
         latestBlockInfoResult = blockData.block.header.height;
         flag = 1;
@@ -336,7 +332,6 @@ async function getLatestBlockHeight(retry) {
 
     while (
       flag == 0 &&
-      retry.rpcNotResponded == false &&
       retry.rpcFailed == false
     ) {
       console.log("Checking for RPC response Type...");
@@ -344,9 +339,8 @@ async function getLatestBlockHeight(retry) {
     }
 
     if (flag == 1) {
-      clearInterval(interval);
       return latestBlockInfoResult;
-    } else if (retry.rpcNotResponded == true || retry.rpcFailed == true) {
+    } else if (retry.rpcFailed == true) {
       return false;
     }
   } catch (error) {
@@ -357,19 +351,24 @@ async function getLatestBlockHeight(retry) {
 // This function is to retry latest block Height upon RPC Failures
 async function fetchLatestBlockHeightHelper() {
   try {
+    let rpcTimeout = process.env.JSON_RPC_TIMEOUT;
     let retry = {
       rpcFailed: false,
-      rpcNotResponded: false,
+      attempts: 1
     };
-    let blockResult = await getLatestBlockHeight(retry);
+    let blockResult = await getLatestBlockHeight(retry, rpcTimeout);
 
     if (blockResult == false) {
-      if (retry.rpcNotResponded == true || retry.rpcFailed == true) {
+      if (retry.rpcFailed == true) {
         while (blockResult == false) {
           retry.rpcFailed = false;
-          retry.rpcNotResponded = false;
-          console.log("Retrying the RPC Call for latest blockData...");
-          blockResult = await getLatestBlockHeight(retry);
+          if(retry.attempts <= process.env.RPC_FAILED_RETRY_ATTEMPTS){
+            retry.attempts++;
+          }else{
+            rpcTimeout = (parseInt(rpcTimeout) + parseInt(process.env.JSON_RPC_TIMEOUT_DELAY)).toString()
+          }
+          console.log("Retrying the RPC Call for latest blockData with timeout : ",rpcTimeout);
+          blockResult = await getLatestBlockHeight(retry, rpcTimeout);
         }
         console.log(
           "Retrying Attempts to fetch latest blockData is Successfull..."
@@ -385,21 +384,16 @@ async function fetchLatestBlockHeightHelper() {
 }
 
 // to get the last block height when the server shut down
-async function getLastBlockHeight(retry) {
+async function getLastBlockHeight(retry, rpcTimeout) {
   try {
     let lastBlock = await redis.client.GET(process.env.LASTBLOCK);
     if (lastBlock == null) {
       return null;
     } else {
-      const interval = setTimeout(function () {
-        retry.rpcNotResponded = true;
-        console.log("RPC not responded for block: ", height);
-      }, 30000);
-
       let flag = 0;
       let lastBlockInfoResult = null;
       casperService
-        .getBlockInfo(lastBlock)
+        .getBlockInfo(lastBlock, rpcTimeout)
         .then(function (blockData) {
           lastBlockInfoResult = blockData.block.header.height;
           flag = 1;
@@ -412,7 +406,6 @@ async function getLastBlockHeight(retry) {
 
       while (
         flag == 0 &&
-        retry.rpcNotResponded == false &&
         retry.rpcFailed == false
       ) {
         console.log("Checking for RPC response Type...");
@@ -420,9 +413,8 @@ async function getLastBlockHeight(retry) {
       }
 
       if (flag == 1) {
-        clearInterval(interval);
         return lastBlockInfoResult;
-      } else if (retry.rpcNotResponded == true || retry.rpcFailed == true) {
+      } else if (retry.rpcFailed == true) {
         return false;
       }
     }
@@ -434,19 +426,24 @@ async function getLastBlockHeight(retry) {
 // This function is to retry last block Height upon RPC Failures
 async function fetchLastBlockHeightHelper() {
   try {
+    let rpcTimeout = process.env.JSON_RPC_TIMEOUT;
     let retry = {
       rpcFailed: false,
-      rpcNotResponded: false,
+      attempts: 1
     };
-    let blockResult = await getLastBlockHeight(retry);
+    let blockResult = await getLastBlockHeight(retry, rpcTimeout);
 
     if (blockResult == false) {
-      if (retry.rpcNotResponded == true || retry.rpcFailed == true) {
+      if (retry.rpcFailed == true) {
         while (blockResult == false) {
           retry.rpcFailed = false;
-          retry.rpcNotResponded = false;
-          console.log("Retrying the RPC Call for last blockData...");
-          blockResult = await getLastBlockHeight(retry);
+          if(retry.attempts <= process.env.RPC_FAILED_RETRY_ATTEMPTS){
+            retry.attempts++;
+          }else{
+            rpcTimeout = (parseInt(rpcTimeout) + parseInt(process.env.JSON_RPC_TIMEOUT_DELAY)).toString();
+          }
+          console.log("Retrying the RPC Call for last blockData with timeout : ",rpcTimeout);
+          blockResult = await getLastBlockHeight(retry, rpcTimeout);
         }
         console.log(
           "Retrying Attempts to fetch last blockData is Successfull..."
@@ -462,7 +459,7 @@ async function fetchLastBlockHeightHelper() {
 }
 
 // to get block data of a node against block height
-async function getblockData(height, retry) {
+async function getblockData(height, retry, rpcTimeout) {
   try {
     let data = await eventsReplayDataModel.find({ blockHeight: height });
     if (
@@ -470,15 +467,10 @@ async function getblockData(height, retry) {
       data[0].blockData.block.body.deploy_hashes.length != data.length
     ) {
       console.log("Fetching block : \n", height);
-      const interval = setTimeout(function () {
-        retry.rpcNotResponded = true;
-        console.log("RPC not responded for block: ", height);
-      }, 30000);
-
       let flag = 0;
       let blockResponse = null;
       casperService
-        .getBlockInfoByHeight(height)
+        .getBlockInfoByHeight(height, rpcTimeout)
         .then(function (blockData) {
           blockResponse = blockData;
           flag = 1;
@@ -491,7 +483,6 @@ async function getblockData(height, retry) {
 
       while (
         flag == 0 &&
-        retry.rpcNotResponded == false &&
         retry.rpcFailed == false
       ) {
         console.log("Checking for RPC response Type...");
@@ -499,9 +490,8 @@ async function getblockData(height, retry) {
       }
 
       if (flag == 1) {
-        clearInterval(interval);
         return blockResponse;
-      } else if (retry.rpcNotResponded == true || retry.rpcFailed == true) {
+      } else if (retry.rpcFailed == true) {
         return false;
       }
     } else {
@@ -515,19 +505,25 @@ async function getblockData(height, retry) {
 // This function is to retry blockData upon RPC Failures
 async function fetchBlockDataHelper(i) {
   try {
+    let rpcTimeout = process.env.JSON_RPC_TIMEOUT;
     let retry = {
       rpcFailed: false,
-      rpcNotResponded: false,
+      attempts : 1
     };
-    let blockResult = await getblockData(i, retry);
-
+    let blockResult = await getblockData(i, retry, rpcTimeout);
+      
     if (blockResult == false) {
-      if (retry.rpcNotResponded == true || retry.rpcFailed == true) {
+      if (retry.rpcFailed == true) {
         while (blockResult == false) {
           retry.rpcFailed = false;
-          retry.rpcNotResponded = false;
-          console.log("Retrying the RPC Call for block: ", i);
-          blockResult = await getblockData(i, retry);
+          if(retry.attempts <= process.env.RPC_FAILED_RETRY_ATTEMPTS){
+            retry.attempts++;
+          }else{
+            rpcTimeout = (parseInt(rpcTimeout) + parseInt(process.env.JSON_RPC_TIMEOUT_DELAY)).toString();
+          }
+          console.log("Retrying the RPC Call for block ",i, " with timeout : ",rpcTimeout);
+          blockResult = await getblockData(i, retry, rpcTimeout);
+          
         }
         console.log(
           "Retrying Attempts to fetch blockData is Successfull : ",
@@ -548,19 +544,16 @@ async function getdeployDataAndInsertInDatabase(
   deployHash,
   height,
   blocksResponse,
-  retry
+  retry,
+  rpcTimeout
 ) {
   try {
     console.log("Fetching deploy : \n", deployHash);
-    const interval = setTimeout(function () {
-      retry.rpcNotResponded = true;
-      console.log("RPC not responded for deployHash: ", deployHash);
-    }, 30000);
-
+  
     let flag = 0;
     let deploysResponse = null;
     casperService
-      .getDeployInfo(deployHash)
+      .getDeployInfo(deployHash, rpcTimeout)
       .then(function (deployData) {
         deploysResponse = deployData;
         flag = 1;
@@ -576,7 +569,6 @@ async function getdeployDataAndInsertInDatabase(
 
     while (
       flag == 0 &&
-      retry.rpcNotResponded == false &&
       retry.rpcFailed == false
     ) {
       console.log("Checking for RPC response Type...");
@@ -584,16 +576,110 @@ async function getdeployDataAndInsertInDatabase(
     }
 
     if (flag == 1) {
-      clearInterval(interval);
       var newData = new eventsReplayDataModel({
         blockHeight: height,
         blockData: blocksResponse,
         deployData: deploysResponse,
         status: "Added",
       });
-      await eventsReplayDataModel.create(newData);
+      
+      let documentSize = JSON.stringify(newData).length;
+      if(documentSize < 1.6e+7){
+        await eventsReplayDataModel.create(newData);
+      }else{
+        console.log("Large deploy received.");
+        if (deploysResponse.execution_results[0].result.Success) {
+          let transforms =
+            deploysResponse.execution_results[0].result.Success.effect
+              .transforms;
+          console.log("transforms: ", transforms);
+          
+          for (var x = 0; x < transforms.length; x++) {
+            if (
+              transforms[x].transform.hasOwnProperty("WriteCLValue") &&
+              typeof transforms[x].transform.WriteCLValue.parsed ===
+                "object" &&
+              transforms[x].transform.WriteCLValue.parsed !== null
+            ) {
+              
+              const maybeCLValue = CLValueParsers.fromJSON(
+                transforms[x].transform.WriteCLValue
+              );
+              const clValue = maybeCLValue.unwrap();
+              if (clValue && clValue instanceof CLMap) {
+                const hash = clValue.get(
+                  CLValueBuilder.string("contract_package_hash")
+                );
+                const eventname = clValue.get(
+                  CLValueBuilder.string("event_type")
+                );
+                if (hash && contractsPackageHashes.includes(hash.value())) {
+                  try{
+                    let emailsTo = process.env.EMAIL_TO.split(",")
+                    let mailOptions = {
+                      to: emailsTo,
+                      from: process.env.EMAIL_FROM,
+                      subject: "RECEIVED LARGE DEPLOY WITH EVENT DATA",
+                      html:
+                        `<h4><b>Deploy hash : ${deploysResponse.deploy.hash}</b></h4>` +
+                        "<p>Transforms :</p>" +
+                        transforms.length +
+                        "<br><br>" +
+                        "Thanks<br>" +
+                        "Scytalelabs<br><br>"
+                    };
+    
+                    await sgMail.sendMultiple(mailOptions);
+                   }catch(error){
+                    console.log("Failed to send email.")
+                    console.log("Error : ", error);
+                   }
+                  // converting events information into JSON form
+                  acc = [
+                    {
+                      deployHash: deploysResponse.deploy.hash,
+                      timestamp: new Date(
+                        deploysResponse.deploy.header.timestamp
+                      ).getTime(),
+                      block_hash:
+                        deploysResponse.execution_results[0].block_hash,
+                      eventName: eventname.value(),
+                      status: "Pending",
+                      eventsdata: JSON.parse(JSON.stringify(clValue.data)),
+                    },
+                  ];
+
+                  //displaying event all data
+                  console.log("Event Received: ", eventname.value());
+                  console.log("DeployHash: ", acc[0].deployHash);
+                  console.log("Timestamp: ", acc[0].timestamp);
+                  console.log("Block Hash: ", acc[0].block_hash);
+                  console.log("Status: ", acc[0].status);
+                  console.log("Data: ", acc[0].eventsdata);
+
+                  //push event to redis queue
+                  redis.client.RPUSH(
+                    process.env.LISTENERREDISEVENTSREPLAYQUEUE,
+                    serialize({ obj: acc[0] })
+                  );
+                } else {
+                  console.log("This is not our contract's event.");
+                } 
+              }
+            }
+          }
+        }
+        
+        var newData = new eventsReplayDataModel({
+          blockHeight: height,
+          blockData: blocksResponse,
+          status: "Special",
+        });
+        
+        await newData.save();
+      }
       return { height, deployHash };
-    } else if (retry.rpcNotResponded == true || retry.rpcFailed == true) {
+    } else if (retry.rpcFailed == true) {
       return false;
     }
   } catch (error) {
@@ -604,28 +690,35 @@ async function getdeployDataAndInsertInDatabase(
 // This function is to retry deployData upon RPC failure
 async function fetchDeployDataHelper(deployHash, height, blocksResponse) {
   try {
+    let rpcTimeout = process.env.JSON_RPC_TIMEOUT;
     let retry = {
       rpcFailed: false,
-      rpcNotResponded: false,
+      attempts : 1
     };
     let deployResult = await getdeployDataAndInsertInDatabase(
       deployHash,
       height,
       blocksResponse,
-      retry
+      retry,
+      rpcTimeout
     );
 
     if (deployResult == false) {
-      if (retry.rpcNotResponded == true || retry.rpcFailed == true) {
+      if (retry.rpcFailed == true) {
         while (deployResult == false) {
           retry.rpcFailed = false;
-          retry.rpcNotResponded = false;
-          console.log("Retrying the RPC Call for deployHash: ", deployHash);
+          if(retry.attempts <= process.env.RPC_FAILED_RETRY_ATTEMPTS){
+            retry.attempts++;
+          }else{
+            rpcTimeout = (parseInt(rpcTimeout) + parseInt(process.env.JSON_RPC_TIMEOUT_DELAY)).toString();
+          }
+          console.log("Retrying the RPC Call for deployHash: ", deployHash," with timeout : ",rpcTimeout);
           deployResult = await getdeployDataAndInsertInDatabase(
             deployHash,
             height,
             blocksResponse,
-            retry
+            retry,
+            rpcTimeout
           );
         }
         console.log(
@@ -697,13 +790,13 @@ const opts2 = {
   max: process.env.DEPLOYSPOOLSIZE, // maximum size of the pool
 };
 
-async function checkResoureAvailibity(myPool) {
+async function checkResoureAvailibity(myPool, maxPoolSize) {
   try {
     let resourcesAvailable = myPool.available;
     let poolSize = myPool.size;
     console.log("resourcesAvailable: ", resourcesAvailable);
     console.log("poolSize: ", poolSize);
-    if (poolSize == process.env.POOLSIZE && resourcesAvailable == 0) {
+    if (poolSize == maxPoolSize && resourcesAvailable == 0) {
       while (resourcesAvailable == 0) {
         console.log("waiting for resources availability...");
         await sleep(1000);
@@ -746,7 +839,7 @@ async function fetchBlocksAndDeploysDataHelper(i, blockPool, deployPool) {
                   }
                 }
                 if (flag == 0) {
-                  await checkResoureAvailibity(deployPool);
+                  await checkResoureAvailibity(deployPool, process.env.DEPLOYSPOOLSIZE);
                   threadForFetchingDeploysData(
                     deployPool,
                     deployHashes[j],
@@ -806,7 +899,7 @@ async function fetchBlocksAndDeploysData(lastBlock, latestBlock) {
       ) {
         console.log("Error : ", error);
       });
-      await checkResoureAvailibity(blockPool);
+      await checkResoureAvailibity(blockPool, process.env.BLOCKSPOOLSIZE);
     }
   } catch (error) {
     throw error;
@@ -864,7 +957,7 @@ async function checkingSpecificBlockData(height) {
 
 async function checkingDeployDataWithDeployHashes(height, data) {
   try {
-    if (data[0].blockData.block.body.deploy_hashes.length != data.length) {
+  if (data[0].blockData.block.body.deploy_hashes.length != data.length) {
       while (data[0].blockData.block.body.deploy_hashes.length != data.length) {
         console.log(
           "Block-" +
@@ -898,7 +991,8 @@ async function filterEventsReplayModel(lastBlock, latestBlock) {
       console.log("In the first loop");
       let data = await checkingSpecificBlockData(i);
       console.log("outside while 1");
-      if (data[0].blockData.block.body.deploy_hashes[0] != "0") {
+      
+      if (data[0].blockData.block.body.deploy_hashes[0] != "0" && data[0].status != "Special") {
         data = await checkingDeployDataWithDeployHashes(i, data);
         console.log("outside while 2");
         for (
@@ -1017,7 +1111,6 @@ async function calculatingServerShutdownTime() {
     let currentDate = new Date().getTime();
     console.log("LatestTime: ", currentDate);
     let diff = currentDate - timeAtShutDown;
-
     if (diff > process.env.TTL && timeAtShutDown != null) {
       console.log("Time Difference is greater than 25 minutes..");
       return true;
@@ -1036,6 +1129,85 @@ const transactionOptions = {
   writeConcern: { w: "majority" },
 };
 
+const replayEventsFromLastBlock = async () => {
+  try {
+    // let iseventsReplay, lastBlock, latestBlock;
+    let eventReplayStatusesData = await manualEventReplayStatuses.findOne({status : "PROGRESS"});
+
+    if (
+      eventReplayStatusesData !== null &&
+      eventReplayStatusesData.replayEventsManually == true
+    ) {
+      console.log("Running events manually");
+      let iseventsReplay = eventReplayStatusesData.replayEventsManually;
+      let lastBlock = eventReplayStatusesData.lastBlockForEventsReplay;
+      let latestBlock = eventReplayStatusesData.lastestBlock;
+
+      if (iseventsReplay == true && lastBlock != null) {
+        fetchBlocksAndDeploysData(lastBlock, latestBlock)
+        .then(async function (response) {
+          console.log("Fetching Blocks and Deploys Data Successfull...");
+        })
+        .catch(function (error) {
+          console.log("Error : ", error);
+          return res.status(500).json({
+            success: false,
+            err: error,
+          });
+        });
+    
+        let interval = setInterval(() => {
+          popAndProcessEventsFromRedisQueue(
+            process.env.LISTENERREDISEVENTSREPLAYQUEUE
+          );
+        }, 2000);
+    
+        await findPackageHashesAndUpdateArray();
+        console.log("packagesHashes :", PackageHashes);
+        contractsPackageHashes = PackageHashes.map((h) => h.toLowerCase());
+    
+        filterEventsReplayModel(lastBlock, latestBlock)
+        .then(async function (response) {
+          
+          let eventsReplayresult = response;
+          if (eventsReplayresult == "eventsReplayCompleted") {
+            console.log("EventsReplay Completed... ");
+            let redisLength = await redis.client.LLEN(
+              process.env.LISTENERREDISEVENTSREPLAYQUEUE
+            );
+            while (redisLength != 0) {
+              redisLength = await redis.client.LLEN(
+                process.env.LISTENERREDISEVENTSREPLAYQUEUE
+              );
+              await sleep(2000);
+            }
+            clearInterval(interval);
+
+            eventReplayStatusesData = await manualEventReplayStatuses.findOne({status : "PROGRESS"});
+            eventReplayStatusesData.replayEventsManually = false;
+            eventReplayStatusesData.status = "DONE";
+            await eventReplayStatusesData.save();
+            console.log("Popping and Producing EventStream Events... ");
+            setInterval(() => {
+              popAndProcessEventsFromRedisQueue(process.env.LISTENERREDISQUEUE);
+            }, 2000);
+          }
+        })
+        .catch(function (error) {
+          console.log("Error : ", error);
+        });
+        }
+    }else{
+      setInterval(() => {
+        popAndProcessEventsFromRedisQueue(process.env.LISTENERREDISQUEUE);
+      }, 2000);
+    }
+  } catch (error) {
+    console.log("error (try-catch) : " + error);
+  }
+}
+
+
 //This function is to syncUp both EventStream and EventsReplay Features
 async function checkIfEventsMissed() {
   try {
@@ -1052,6 +1224,7 @@ async function checkIfEventsMissed() {
       eventReplayStatusData.eventsReplayStatus == "DONE"
     ) {
       iseventsReplay = await calculatingServerShutdownTime();
+      
       if (iseventsReplay == true) {
         eventReplayStatusesData.timeForEventsReplay = iseventsReplay;
 
@@ -1122,7 +1295,7 @@ async function checkIfEventsMissed() {
 
     if (iseventsReplay == true && lastBlock != null) {
       console.log("Starting Events Reply...");
-
+ 
       fetchBlocksAndDeploysData(lastBlock, latestBlock)
         .then(async function (response) {
           console.log("Fetching Blocks and Deploys Data Successfull...");
@@ -1171,9 +1344,8 @@ async function checkIfEventsMissed() {
           console.log("Error : ", error);
         });
     } else {
-      setInterval(() => {
-        popAndProcessEventsFromRedisQueue(process.env.LISTENERREDISQUEUE);
-      }, 2000);
+      //Check value for replay event manually. If true we replay the events manually from given last block
+      await replayEventsFromLastBlock();
     }
   } catch (error) {
     throw error;
@@ -1549,4 +1721,40 @@ router
       });
     }
   });
+
+router.route("/replayEventsManually").post(
+  auth.verifyToken, verifyAdmin,
+   async function (req,res,next){
+  try{
+    const { lastBlock, latestBlock } = req.body;
+    
+    if(!lastBlock || !latestBlock)
+    return res.status(400).send("Please send lastBlock and latestBlock arguments in request.");
+
+    if(typeof(lastBlock) != "number" || typeof(latestBlock) != "number")
+    return res.status(400).send("Arguments lastBlock and latestBlock must be numbers.");
+
+    const eventReplayStatusesData = await manualEventReplayStatuses.findOne({status : "PROGRESS"});
+    if(eventReplayStatusesData == null){
+      await manualEventReplayStatuses.create({
+        lastBlockForEventsReplay : lastBlock,
+        lastestBlock : latestBlock,
+        replayEventsManually : true,
+        status : "PROGRESS"
+      });
+  
+      return res.status(200).send("Successfully setup permission for events replay manually.");
+    }else{
+      return res.status(400).send("Previous manual events replay is in progress. Please try again later.");
+    }
+  }catch(error){
+    console.log("error (try-catch) : " + error);
+    return res.status(500).json({
+      success: false,
+      err: error,
+    });
+  }
+
+})
+
 module.exports = router;

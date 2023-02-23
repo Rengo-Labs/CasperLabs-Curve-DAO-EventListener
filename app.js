@@ -4,7 +4,6 @@ var path = require('path');
 var cookieParser = require('cookie-parser');
 var logger = require('morgan');
 require("dotenv").config();
-const mongoose = require("mongoose");
 const swaggerUI = require("swagger-ui-express");
 const swaggerJsDoc = require("swagger-jsdoc");
 
@@ -56,6 +55,9 @@ app.use('/', indexRouter);
 app.use('/', adminRouter);
 app.use('/listener', listenerRouter);
 
+process.on('uncaughtException', function(err) {
+	console.log(err)
+})
 
 // catch 404 and forward to error handler
 app.use(function(req, res, next) {

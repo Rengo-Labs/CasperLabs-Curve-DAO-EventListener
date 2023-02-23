@@ -18,8 +18,14 @@ To package and run this application with node, you'll need to:
 * npm install to install all the packages in the package.json file
 * npm start to run the server
 
-Listener Architecture Documentation: 
+### Swagger Documentation
+
+* Run the backend locally
+* Goto https://localhost:3000/api-docs
+
+#### Architecture Documentation: 
 https://docs.google.com/document/d/1eiP_UrAI2vrevCzMLlosOp23WibxohCiv6BirpU99V0/edit?usp=sharing
 
-AWS Link: http://curvelistenerbackendfinalized-env.eba-h5qmptdm.us-east-1.elasticbeanstalk.com/
+#### AWS Link: 
+http://curvelistenerbackendfinalized-env.eba-h5qmptdm.us-east-1.elasticbeanstalk.com/
 
