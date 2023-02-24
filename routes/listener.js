@@ -1722,6 +1722,83 @@ router
     }
   });
 
+/**
+ * @swagger
+ * components:
+ *   schemas:
+ *     Replay Events:
+ *       type: object
+ *       required:
+ *         - lastBlock
+ *         - latestBlock
+ *       properties:
+ *         lastBlock:
+ *           type: number
+ *           description: The lastBlock to start replayEvents from.
+ *         latestBlock:
+ *           type: number
+ *           description: The latestBlock to end replayEvents.
+ */
+
+/**
+ * @swagger
+ * /listener/replayEventsManually:
+ *   post:
+ *     description: This endpoint is used to setup permission for replay events manually.
+ *     tags: [Replay Events]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               lastBlock:
+ *                 type: number
+ *               latestBlock:
+ *                 type: number
+ *           examples:
+ *             '1':
+ *               value: "{\r\n    \"lastBlock\":1506688,\r\n      \"latestBlock\":1508921\r\n}"
+ *             '2':
+ *               value: "{\r\n    \"lastBlock\":1506688,\r\n      \"latestBlock\":1508921\r\n}"
+ *
+ *     responses:
+ *       200:
+ *         description: If successfully setup permission for events replay manually.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: string
+ *               example: {
+ *                         "responseStatus": {
+ *                             "success": true,
+ *                             "errorCode": 0,
+ *                             "errorMessage": "",
+ *                             "error": null
+ *                         },
+ *                         "body": {
+ *                             "message": "Successfully setup permission for events replay manually."
+ *                         }
+ *                     }
+ *
+ *       400:
+ *         description: If previous manual events replay is in progress. Please try again later.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: string
+ *               example: {
+ *                           "responseStatus": {
+ *                             "success": false,
+ *                             "errorCode": 400,
+ *                             "errorMessage": "Previous manual events replay is in progress. Please try again later.",
+ *                             "error": {}
+ *                           },
+ *                           "body": null
+ *                         }
+ */  
+
 router.route("/replayEventsManually").post(
   auth.verifyToken, verifyAdmin,
    async function (req,res,next){

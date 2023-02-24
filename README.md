@@ -16,6 +16,10 @@ To package and run this application with node, you'll need to:
 ### Setup for First-time Users
 
 * npm install to install all the packages in the package.json file
+* make a new file and name it .env
+* copy paste the env.example file content into .env file
+* make sure env variables are set properly
+* add packageHashes to database by calling addPackageHashesInDatabase endpoint
 * npm start to run the server
 
 ### Swagger Documentation
