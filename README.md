@@ -9,8 +9,8 @@ To package and run this application with node, you'll need to:
 * [Install Node](https://nodejs.org/en/) 
 * Clone this repository:
 
-      $ git clone https://github.com/Scytalelabs-official/CasperLabs-CURVE-DAO-EventListner.git
-      $ cd CasperLabs-CURVE-DAO-EventListner
+      $ git clone https://github.com/Rengo-Labs/CasperLabs-Curve-DAO-EventListener.git
+      $ cd CasperLabs-Curve-DAO-EventListener
       
 
 ### Setup for First-time Users

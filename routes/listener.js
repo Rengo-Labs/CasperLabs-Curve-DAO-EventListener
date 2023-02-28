@@ -625,8 +625,8 @@ async function getdeployDataAndInsertInDatabase(
                         "<p>Transforms :</p>" +
                         transforms.length +
                         "<br><br>" +
-                        "Thanks<br>" +
-                        "Scytalelabs<br><br>"
+                        "Thanks<br>" + 
+			"CurveDAO EventListener<br>"
                     };
     
                     await sgMail.sendMultiple(mailOptions);
